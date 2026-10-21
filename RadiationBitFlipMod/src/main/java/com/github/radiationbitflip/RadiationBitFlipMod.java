@@ -3,29 +3,20 @@ package com.github.radiationbitflip;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
-import net.minecraft.block.Block;
-import net.minecraft.block.state.IBlockState;
-import net.minecraft.entity.player.EntityPlayerMP;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.world.WorldServer;
-import net.minecraft.world.chunk.Chunk;
-import net.minecraftforge.common.MinecraftForge;
-import net.minecraftforge.fml.common.Mod;
-import net.minecraftforge.fml.common.SidedProxy;
-import net.minecraftforge.fml.common.event.FMLPreInitializationEvent;
-import net.minecraftforge.fml.common.event.FMLServerStoppedEvent;
-import net.minecraftforge.fml.common.eventhandler.SubscribeEvent;
-import net.minecraftforge.fml.common.gameevent.TickEvent;
-import net.minecraftforge.fml.common.gameevent.TickEvent.ServerTickEvent;
-import net.minecraftforge.fml.common.network.NetworkRegistry;
-import net.minecraftforge.fml.common.network.simpleimpl.SimpleNetworkWrapper;
-import net.minecraftforge.fml.relauncher.Side;
+import net.fabricmc.api.ModInitializer;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.state.BlockState;
 
-@Mod(modid = RadiationBitFlipMod.ID, name = "Radiation Bit Flip Mod", version = RadiationBitFlipMod.VERSION,
-        guiFactory = "com.github.radiationbitflip.ModGuiFactory")
-public class RadiationBitFlipMod {
+public class RadiationBitFlipMod implements ModInitializer {
     static final String ID = "radiation-bit-flip";
-    static final String VERSION = "2.0.0";
     static final int MODE_OFF = 0;
     static final int MODE_FULL = 1;
     static final int MODE_SOLIDS_ONLY = 2;
@@ -41,35 +32,27 @@ public class RadiationBitFlipMod {
     private static final int BLOCKS_PER_SECTION = 16 * 16 * 16;
     private static final int BITS_PER_BLOCK_ID = 8;
 
-    @Mod.Instance(ID)
-    public static RadiationBitFlipMod instance;
+    private static final Random random = new Random();
+    private static volatile int mode = MODE_SOLIDS_ONLY;
+    private static volatile int rateMode = RATE_MEDIUM;
+    private static long replayTicks;
 
-    @SidedProxy(clientSide = "com.github.radiationbitflip.ClientProxy",
-                serverSide = "com.github.radiationbitflip.CommonProxy")
-    static CommonProxy proxy;
+    @Override
+    public void onInitialize() {
+        PayloadTypeRegistry.playC2S().register(ModePayload.TYPE, ModePayload.CODEC);
+        ServerPlayNetworking.registerGlobalReceiver(ModePayload.TYPE,
+                (payload, context) -> setSettings(payload.mode(), payload.rate()));
 
-    static SimpleNetworkWrapper network;
-    private final Random random = new Random();
-    private volatile int mode = MODE_SOLIDS_ONLY;
-    private volatile int rateMode = RATE_MEDIUM;
-    private long replayTicks;
-
-    @Mod.EventHandler
-    public void preInit(FMLPreInitializationEvent event) {
-        network = NetworkRegistry.INSTANCE.newSimpleChannel(ID);
-        network.registerMessage(ModeMessage.Handler.class, ModeMessage.class, 0, Side.SERVER);
-        proxy.preInit();
-        MinecraftForge.EVENT_BUS.register(this);
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> LegacyBlockIds.load());
+        ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+            mode = MODE_SOLIDS_ONLY;
+            rateMode = RATE_MEDIUM;
+            replayTicks = 0;
+        });
+        ServerTickEvents.END_SERVER_TICK.register(RadiationBitFlipMod::onServerTick);
     }
 
-    @Mod.EventHandler
-    public void serverStopped(FMLServerStoppedEvent event) {
-        mode = MODE_SOLIDS_ONLY;
-        rateMode = RATE_MEDIUM;
-        replayTicks = 0;
-    }
-
-    void setSettings(int requestedMode, int requestedRate) {
+    static void setSettings(int requestedMode, int requestedRate) {
         if (requestedMode >= MODE_OFF && requestedMode <= MODE_SOLIDS_ONLY) {
             mode = requestedMode;
         }
@@ -79,23 +62,23 @@ public class RadiationBitFlipMod {
         }
     }
 
-    @SubscribeEvent
-    public void onServerTick(ServerTickEvent event) {
-        if (event.phase == TickEvent.Phase.END && rateMode == RATE_REPLAY) replayTicks++;
+    private static void onServerTick(MinecraftServer server) {
+        if (rateMode == RATE_REPLAY) replayTicks++;
+        if (mode == MODE_OFF || !LegacyBlockIds.isLoaded()) return;
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            tickPlayer(player);
+        }
     }
 
-    @SubscribeEvent
-    public void onPlayerTick(TickEvent.PlayerTickEvent event) {
-        if (event.phase != TickEvent.Phase.END || event.player.world.isRemote || mode == 0
-                || !(event.player instanceof EntityPlayerMP)) return;
-
-        EntityPlayerMP player = (EntityPlayerMP) event.player;
-        WorldServer world = player.getServerWorld();
-        BlockPos center = player.getPosition();
+    private static void tickPlayer(ServerPlayer player) {
+        ServerLevel level = player.level();
+        BlockPos center = player.blockPosition();
         int centerChunkX = center.getX() >> 4;
         int centerChunkZ = center.getZ() >> 4;
         int centerSectionY = center.getY() >> 4;
-        List<Section> sections = new ArrayList<Section>(64);
+        int minSectionY = level.getMinSectionY();
+        int maxSectionY = level.getMaxSectionY();
+        List<Section> sections = new ArrayList<>(64);
 
         // the four sections on each axis are -1, 0, +1, +2 from the player's section.
         // only loaded chunks are considered; this does not load or generate terrain.
@@ -103,11 +86,10 @@ public class RadiationBitFlipMod {
             for (int dz = -1; dz <= 2; dz++) {
                 int chunkX = centerChunkX + dx;
                 int chunkZ = centerChunkZ + dz;
-                Chunk chunk = world.getChunkProvider().getLoadedChunk(chunkX, chunkZ);
-                if (chunk == null) continue;
+                if (level.getChunkSource().getChunkNow(chunkX, chunkZ) == null) continue;
                 for (int dy = -1; dy <= 2; dy++) {
                     int sectionY = centerSectionY + dy;
-                    if (sectionY >= 0 && sectionY < 16) {
+                    if (sectionY >= minSectionY && sectionY <= maxSectionY) {
                         sections.add(new Section(chunkX, sectionY, chunkZ));
                     }
                 }
@@ -125,14 +107,14 @@ public class RadiationBitFlipMod {
         for (int i = 0; i < attempts; i++) {
             Section section = sections.get(random.nextInt(sections.size()));
             int index = random.nextInt(BLOCKS_PER_SECTION);
-            BlockPos pos = new BlockPos((section.x << 4) + (index & 15),
-                    (section.y << 4) + ((index >> 8) & 15),
-                    (section.z << 4) + ((index >> 4) & 15));
-            flip(world, pos, selectedMode);
+            BlockPos pos = new BlockPos((section.x() << 4) + (index & 15),
+                    (section.y() << 4) + ((index >> 8) & 15),
+                    (section.z() << 4) + ((index >> 4) & 15));
+            flip(level, pos, selectedMode);
         }
     }
 
-    private double getCurrentRate() {
+    private static double getCurrentRate() {
         if (rateMode == RATE_LOW) return LOW_RATE;
         if (rateMode == RATE_HIGH) return HIGH_RATE;
         if (rateMode != RATE_REPLAY) return MEDIUM_RATE;
@@ -149,40 +131,33 @@ public class RadiationBitFlipMod {
         return start + (end - start) * amount;
     }
 
-    private void flip(WorldServer world, BlockPos pos, int selectedMode) {
-        IBlockState original = world.getBlockState(pos);
-        if (selectedMode == MODE_SOLIDS_ONLY && !original.getMaterial().isSolid()) return;
+    private static void flip(ServerLevel level, BlockPos pos, int selectedMode) {
+        BlockState original = level.getBlockState(pos);
+        if (selectedMode == MODE_SOLIDS_ONLY && !original.isSolid()) return;
 
-        int oldId = Block.getIdFromBlock(original.getBlock());
-        int newId = oldId ^ (1 << random.nextInt(BITS_PER_BLOCK_ID));
-        Block replacement = Block.getBlockById(newId);
-        // unknown ids default to air, so we keep the original block
-        if (replacement == null || Block.getIdFromBlock(replacement) != newId) return;
+        // blocks are flipped by their 1.12 id, metadata stays the same
+        int oldKey = LegacyBlockIds.toLegacy(original);
+        if (oldKey < 0) return;
+        int newKey = oldKey ^ (1 << (4 + random.nextInt(BITS_PER_BLOCK_ID)));
+        BlockState next = LegacyBlockIds.fromLegacy(newKey);
+        // unknown ids or metadata keep the original block
+        if (next == null) return;
 
         try {
-            int metadata = original.getBlock().getMetaFromState(original);
-            IBlockState next = replacement.getStateFromMeta(metadata);
-            if (replacement.getMetaFromState(next) != metadata) return;
-            world.setBlockState(pos, next, 2);
+            // 1.12 worked out connections on render, so refresh them here.
+            // blocks that would pop off stay floating like they did back then.
+            BlockState shaped = Block.updateFromNeighbourShapes(next, level, pos);
+            if (!shaped.isAir() || next.isAir()) next = shaped;
+            level.setBlock(pos, next, Block.UPDATE_CLIENTS);
         } catch (RuntimeException failure) {
             // if a block rejects the new state, retain the original state.
             try {
-                if (!world.getBlockState(pos).equals(original)) world.setBlockState(pos, original, 2);
+                if (level.getBlockState(pos) != original) level.setBlock(pos, original, Block.UPDATE_CLIENTS);
             } catch (RuntimeException ignored) {
                 // there is no safe further operation if the world itself rejects rollback.
             }
         }
     }
 
-    private static final class Section {
-        final int x;
-        final int y;
-        final int z;
-
-        Section(int x, int y, int z) {
-            this.x = x;
-            this.y = y;
-            this.z = z;
-        }
-    }
+    private record Section(int x, int y, int z) { }
 }

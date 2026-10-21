@@ -1,35 +1,39 @@
-buildscript {
-    repositories {
-        maven { url = 'https://maven.minecraftforge.net/' }
-        mavenCentral()
-    }
-    dependencies {
-        classpath 'net.minecraftforge.gradle:ForgeGradle:3.+'
-    }
+plugins {
+    id 'fabric-loom' version "${loom_version}"
 }
 
-apply plugin: 'net.minecraftforge.gradle'
+version = "${project.mod_version}+${project.minecraft_version}"
+group = project.maven_group
 
-version = '2.0.0'
-group = 'com.github.radiation-bit-flip'
-archivesBaseName = 'radiation-bit-flip-mod'
+base {
+    archivesName = project.archives_base_name
+}
 
-sourceCompatibility = targetCompatibility = '1.8'
-compileJava.sourceCompatibility = compileJava.targetCompatibility = '1.8'
-
-minecraft {
-    mappings channel: 'snapshot', version: '20171003-1.12'
-    runs {
-        client { workingDirectory project.file('run') }
-        server { workingDirectory project.file('run') }
-    }
+repositories {
+    maven { url = 'https://maven.terraformersmc.com/releases/' }
 }
 
 dependencies {
-    minecraft 'net.minecraftforge:forge:1.12.2-14.23.5.2859'
+    minecraft "com.mojang:minecraft:${project.minecraft_version}"
+    mappings loom.officialMojangMappings()
+    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    // optional, only used for the config button in the mod list
+    modCompileOnly "com.terraformersmc:modmenu:${project.modmenu_version}"
 }
 
-jar {
-    archiveName = 'radiation-bit-flip-2.0.0.jar'
+processResources {
+    inputs.property 'version', project.version
+    filesMatching('fabric.mod.json') {
+        expand 'version': project.version
+    }
 }
-jar.finalizedBy('reobfJar')
+
+tasks.withType(JavaCompile).configureEach {
+    it.options.release = 21
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_21
+    targetCompatibility = JavaVersion.VERSION_21
+}

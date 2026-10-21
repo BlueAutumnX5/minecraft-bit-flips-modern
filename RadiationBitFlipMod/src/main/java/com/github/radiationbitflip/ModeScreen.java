@@ -1,74 +1,74 @@
 package com.github.radiationbitflip;
 
-import java.io.IOException;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiButton;
-import net.minecraft.client.gui.GuiScreen;
-import net.minecraftforge.fml.relauncher.Side;
-import net.minecraftforge.fml.relauncher.SideOnly;
-import org.lwjgl.input.Keyboard;
+import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.KeyEvent;
+import net.minecraft.network.chat.Component;
 
-@SideOnly(Side.CLIENT)
-public class ModeScreen extends GuiScreen {
+public class ModeScreen extends Screen {
+    private static final String[] MODE_LABELS = {"[off]", "[on - full]", "[on - solids only]"};
+    private static final String[] RATE_LABELS = {"[low]", "[medium]", "[high]", "[replay]"};
     private static int selectedMode = RadiationBitFlipMod.MODE_SOLIDS_ONLY;
     private static int selectedRate = RadiationBitFlipMod.RATE_MEDIUM;
     private static boolean pendingSettings;
-    private final GuiScreen parent;
+    private final Screen parent;
+    private final Button[] modeButtons = new Button[MODE_LABELS.length];
+    private final Button[] rateButtons = new Button[RATE_LABELS.length];
 
-    ModeScreen() {
-        this(null);
-    }
-
-    ModeScreen(GuiScreen parent) {
+    public ModeScreen(Screen parent) {
+        super(Component.literal("Radiation Bit Flip Mod"));
         this.parent = parent;
     }
 
     @Override
-    public void initGui() {
-        buttonList.clear();
+    protected void init() {
         int buttonWidth = 120;
         int gap = 6;
         int left = (width - (3 * buttonWidth + 2 * gap)) / 2;
         int y = height / 2 - 25;
-        buttonList.add(new GuiButton(0, left, y, buttonWidth, 20, "[off]"));
-        buttonList.add(new GuiButton(1, left + buttonWidth + gap, y, buttonWidth, 20, "[on - full]"));
-        buttonList.add(new GuiButton(2, left + 2 * (buttonWidth + gap), y,
-                buttonWidth, 20, "[on - solids only]"));
+        for (int i = 0; i < modeButtons.length; i++) {
+            int mode = i;
+            modeButtons[i] = addRenderableWidget(Button.builder(Component.literal(MODE_LABELS[i]),
+                    button -> select(mode, selectedRate))
+                    .bounds(left + i * (buttonWidth + gap), y, buttonWidth, 20).build());
+        }
 
         int rateWidth = 88;
         left = (width - (4 * rateWidth + 3 * gap)) / 2;
         y += 48;
-        buttonList.add(new GuiButton(10, left, y, rateWidth, 20, "[low]"));
-        buttonList.add(new GuiButton(11, left + rateWidth + gap, y, rateWidth, 20, "[medium]"));
-        buttonList.add(new GuiButton(12, left + 2 * (rateWidth + gap), y, rateWidth, 20, "[high]"));
-        buttonList.add(new GuiButton(13, left + 3 * (rateWidth + gap), y, rateWidth, 20, "[replay]"));
+        for (int i = 0; i < rateButtons.length; i++) {
+            int rate = i;
+            rateButtons[i] = addRenderableWidget(Button.builder(Component.literal(RATE_LABELS[i]),
+                    button -> select(rate == RadiationBitFlipMod.RATE_REPLAY
+                            ? RadiationBitFlipMod.MODE_FULL : selectedMode, rate))
+                    .bounds(left + i * (rateWidth + gap), y, rateWidth, 20).build());
+        }
         updateButtons();
     }
 
-    @Override
-    protected void actionPerformed(GuiButton button) {
-        if (button.id >= 0 && button.id <= 2) selectedMode = button.id;
-        if (button.id >= 10 && button.id <= 13) selectedRate = button.id - 10;
-        if (selectedRate == RadiationBitFlipMod.RATE_REPLAY && button.id == 13) {
-            selectedMode = RadiationBitFlipMod.MODE_FULL;
-        }
+    private void select(int mode, int rate) {
+        selectedMode = mode;
+        selectedRate = rate;
         pendingSettings = true;
         sendSettings();
         updateButtons();
     }
 
     private void updateButtons() {
-        for (GuiButton button : buttonList) {
-            if (button.id >= 0 && button.id <= 2) button.enabled = button.id != selectedMode;
-            if (button.id >= 10 && button.id <= 13) button.enabled = button.id - 10 != selectedRate;
-        }
+        for (int i = 0; i < modeButtons.length; i++) modeButtons[i].active = i != selectedMode;
+        for (int i = 0; i < rateButtons.length; i++) rateButtons[i].active = i != selectedRate;
     }
 
     static void sendSettings() {
         if (!pendingSettings) return;
-        Minecraft minecraft = Minecraft.getMinecraft();
+        Minecraft minecraft = Minecraft.getInstance();
         if (minecraft.player == null || minecraft.getConnection() == null) return;
-        RadiationBitFlipMod.network.sendToServer(new ModeMessage(selectedMode, selectedRate));
+        // servers without the mod don't have the channel
+        if (!ClientPlayNetworking.canSend(ModePayload.TYPE)) return;
+        ClientPlayNetworking.send(new ModePayload(selectedMode, selectedRate));
         pendingSettings = false;
     }
 
@@ -79,20 +79,24 @@ public class ModeScreen extends GuiScreen {
     }
 
     @Override
-    protected void keyTyped(char typedChar, int keyCode) throws IOException {
-        if (keyCode == Keyboard.KEY_ESCAPE || keyCode == Keyboard.KEY_K) {
-            mc.displayGuiScreen(parent);
-            return;
+    public boolean keyPressed(KeyEvent event) {
+        if (RadiationBitFlipModClient.openMenu.matches(event)) {
+            onClose();
+            return true;
         }
-        super.keyTyped(typedChar, keyCode);
+        return super.keyPressed(event);
     }
 
     @Override
-    public void drawScreen(int mouseX, int mouseY, float partialTicks) {
-        drawDefaultBackground();
-        drawCenteredString(fontRenderer, "Radiation Bit Flip Mod", width / 2, height / 2 - 72, 0xFFFFFF);
-        drawCenteredString(fontRenderer, "type", width / 2, height / 2 - 39, 0xA0A0A0);
-        drawCenteredString(fontRenderer, "flip rate", width / 2, height / 2 + 9, 0xA0A0A0);
-        super.drawScreen(mouseX, mouseY, partialTicks);
+    public void onClose() {
+        minecraft.setScreen(parent);
+    }
+
+    @Override
+    public void render(GuiGraphics graphics, int mouseX, int mouseY, float partialTick) {
+        super.render(graphics, mouseX, mouseY, partialTick);
+        graphics.drawCenteredString(font, title, width / 2, height / 2 - 72, 0xFFFFFFFF);
+        graphics.drawCenteredString(font, "type", width / 2, height / 2 - 39, 0xFFA0A0A0);
+        graphics.drawCenteredString(font, "flip rate", width / 2, height / 2 + 9, 0xFFA0A0A0);
     }
 }

@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "radiation-bit-flip",
+  "version": "${version}",
+  "name": "Radiation Bit Flip Mod",
+  "description": "Flips block ID bits around the player according to measured SEU rate.",
+  "authors": ["Atomic Frontier (James)"],
+  "contact": {
+    "sources": "https://github.com/AtomicFrontierCode/minecraft"
+  },
+  "license": "MIT",
+  "icon": "assets/radiation-bit-flip/icon.png",
+  "environment": "*",
+  "entrypoints": {
+    "main": ["com.github.radiationbitflip.RadiationBitFlipMod"],
+    "client": ["com.github.radiationbitflip.RadiationBitFlipModClient"],
+    "modmenu": ["com.github.radiationbitflip.ModMenuCompat"]
+  },
+  "depends": {
+    "fabricloader": ">=0.17.0",
+    "minecraft": "~1.21.11",
+    "java": ">=21",
+    "fabric-api": "*"
+  }
+}
