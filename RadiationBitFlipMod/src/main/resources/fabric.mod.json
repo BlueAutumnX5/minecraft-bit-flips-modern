@@ -5,6 +5,7 @@
   "name": "Radiation Bit Flip Mod",
   "description": "Flips block ID bits around the player according to measured SEU rate.",
   "authors": ["Atomic Frontier (James)"],
+  "contributors": ["BlueAutumnX5"],
   "contact": {
     "sources": "https://github.com/AtomicFrontierCode/minecraft"
   },
